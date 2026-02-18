@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time Dashboard v4.0</title>
+
+    <link id="favicon" rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⏳</text></svg>">
+    
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        :root {
+            --bg-color: #f8f9fa; --card-bg: #ffffff; --text-main: #1a1a1a;
+            --text-sub: #6c757d; --radius: 20px; --accent: #6366f1;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root { --bg-color: #0d0e12; --card-bg: #1a1b23; --text-main: #f8f9fa; --text-sub: #a0a0ab; }
+        }
+        body {
+            background-color: var(--bg-color); color: var(--text-main);
+            font-family: 'Inter', -apple-system, sans-serif;
+            margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center;
+        }
+        .container { width: 100%; max-width: 500px; display: none; }
+        #auth-container { width: 100%; max-width: 400px; margin-top: 50px; }
+        .floating-controls {
+            position: fixed; bottom: 30px; right: 20px; z-index: 1000;
+            display: none; flex-direction: column; gap: 10px;
+        }
+        .btn-round {
+            width: 50px; height: 50px; border-radius: 50%; border: none;
+            background: var(--accent); color: white; cursor: pointer;
+            box-shadow: 0 8px 16px rgba(99, 102, 241, 0.3); font-size: 1.3rem;
+            display: flex; align-items: center; justify-content: center;
+        }
+        header {
+            text-align: center; padding: 40px 20px; border-radius: var(--radius);
+            background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+            color: white; margin-bottom: 25px; transition: background 2s ease-in-out;
+        }
+        .section-title { margin: 25px 0 12px 10px; font-size: 0.75rem; font-weight: 800; color: var(--text-sub); text-transform: uppercase; }
+        .progress-card {
+            background: var(--card-bg); padding: 18px; border-radius: var(--radius);
+            margin-bottom: 12px; border: 1px solid rgba(0,0,0,0.05); cursor: pointer; position: relative;
+        }
+        .info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .title { font-weight: 700; display: flex; align-items: center; gap: 8px; font-size: 0.95rem; }
+        .percentage { font-family: monospace; font-size: 0.85rem; opacity: 0.7; }
+        .bar-container { height: 8px; background: rgba(0,0,0,0.08); border-radius: 4px; overflow: hidden; }
+        .bar-fill { height: 100%; width: 0%; transition: width 1s ease; }
+        .add-box, .auth-box {
+            background: var(--card-bg); padding: 25px; border-radius: var(--radius);
+            display: flex; flex-direction: column; gap: 15px; border: 1px solid rgba(0,0,0,0.05);
+        }
+        input {
+            width: 100%; padding: 12px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.1);
+            background: var(--bg-color); color: var(--text-main); font-size: 1rem; outline: none;
+        }
+        .color-picker-wrapper { display: flex; align-items: center; gap: 15px; margin-top: 5px; }
+        #goalColor { opacity: 0; position: absolute; width: 40px; height: 40px; cursor: pointer; }
+        .color-circle {
+            width: 44px; height: 44px; border-radius: 50%; border: 3px solid white; 
+            box-shadow: 0 0 0 2px rgba(0,0,0,0.1); cursor: pointer; background-color: #6366f1;
+        }
+        button {
+            background: var(--accent); color: white; border: none; padding: 16px;
+            border-radius: 14px; font-weight: 700; cursor: pointer; font-size: 1rem;
+        }
+        .logout-btn { background: #ef4444; margin-top: 20px; padding: 10px; font-size: 0.8rem; width: 100%; color: white; border-radius: 12px; border: none; cursor: pointer; }
+        #toast {
+            position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+            background: #1a1a1a; color: white; padding: 12px 24px;
+            border-radius: 50px; opacity: 0; transition: 0.3s; z-index: 10000;
+        }
+        body.zen-mode header, body.zen-mode .add-box, body.zen-mode .section-title, body.zen-mode .del-btn, body.zen-mode .logout-btn {
+            display: none !important;
+        }
+        .del-btn { color: #ef4444; border: none; background: none; cursor: pointer; font-size: 1.1rem; }
+    </style>
+</head>
+<body>
+
+<div id="toast"></div>
+
+<div id="auth-container">
+    <header><h1>Вход</h1><p>Синхронизируй свои цели</p></header>
+    <div class="auth-box">
+        <input type="email" id="auth-email" placeholder="Email">
+        <input type="password" id="auth-password" placeholder="Пароль">
+        <button onclick="handleAuth('login')">Войти</button>
+        <button onclick="handleAuth('signup')" style="background: none; color: var(--text-sub); font-size: 0.8rem;">Нет аккаунта? Регистрация</button>
+    </div>
+</div>
+
+<div class="container" id="main-app">
+    <div class="floating-controls" id="controls">
+        <button class="btn-round" onclick="toggleZen()">🧘</button>
+        <button class="btn-round" onclick="shareReport()" style="background: #10b981;">🔗</button>
+    </div>
+
+    <header id="dynamic-header">
+        <h1 id="greeting" style="margin:0; font-size: 2rem;">Привет</h1>
+        <p id="current-date" style="margin:5px 0 0; opacity: 0.8;"></p>
+    </header>
+
+    <div id="base-tasks"></div>
+    <div class="section-title">Мои цели</div>
+    <div id="custom-tasks"></div>
+
+    <div class="add-box">
+        <div style="display:flex; flex-direction:column; gap:5px;"><label style="font-size:0.7rem; font-weight:bold; color:var(--text-sub)">Название</label><input type="text" id="goalName"></div>
+        <div style="display:flex; flex-direction:column; gap:5px;"><label style="font-size:0.7rem; font-weight:bold; color:var(--text-sub)">Начало</label><input type="date" id="startDate"></div>
+        <div style="display:flex; flex-direction:column; gap:5px;"><label style="font-size:0.7rem; font-weight:bold; color:var(--text-sub)">Завершение</label><input type="date" id="endDate"></div>
+        <div class="color-picker-wrapper">
+            <input type="color" id="goalColor" value="#6366f1" oninput="updateCircleColor(this.value)">
+            <div class="color-circle" id="colorIndicator" onclick="document.getElementById('goalColor').click()"></div>
+            <span style="font-size: 0.8rem; color: var(--text-sub);">Цвет полоски</span>
+        </div>
+        <button onclick="addGoal()">Создать в облаке</button>
+    </div>
+    
+    <button class="logout-btn" onclick="handleLogout()">Выйти из аккаунта</button>
+</div>
+
+<script>
+    const SUPABASE_URL = 'https://pknlgkatbzoqemyyomnr.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_my49hMN7vJp2xXfqxiQ90Q_7Zg708ua';
+    
+    // Инициализация клиента
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let userGoals = [];
+    let currentUser = null;
+    let showAsCountdown = false;
+    let currentFaviconHour = -1;
+
+    const baseItems = [
+        { id: 'day', label: 'День', unit: 'day', color: '#6366f1' },
+        { id: 'month', label: 'Месяц', unit: 'month', color: '#ec4899' },
+        { id: 'year', label: 'Год', unit: 'year', color: '#22c55e' }
+    ];
+
+    // --- АВТОРИЗАЦИЯ ---
+    async function handleAuth(type) {
+        const email = document.getElementById('auth-email').value;
+        const password = document.getElementById('auth-password').value;
+        if(!email || !password) return showToast("Заполни поля!");
+
+        const { data, error } = type === 'login' 
+            ? await supabaseClient.auth.signInWithPassword({ email, password })
+            : await supabaseClient.auth.signUp({ email, password });
+
+        if (error) showToast(error.message);
+        else if (type === 'signup') showToast("Регистрация успешна! Теперь войдите.");
+    }
+
+    async function handleLogout() {
+        await supabaseClient.auth.signOut();
+    }
+
+    supabaseClient.auth.onAuthStateChange((event, session) => {
+        currentUser = session?.user || null;
+        if (currentUser) {
+            document.getElementById('auth-container').style.display = 'none';
+            document.getElementById('main-app').style.display = 'block';
+            document.getElementById('controls').style.display = 'flex';
+            fetchGoals();
+        } else {
+            document.getElementById('auth-container').style.display = 'block';
+            document.getElementById('main-app').style.display = 'none';
+            document.getElementById('controls').style.display = 'none';
+        }
+    });
+
+    // --- РАБОТА С БАЗОЙ ---
+    async function fetchGoals() {
+        const { data, error } = await supabaseClient.from('goals').select('*');
+        if (!error) {
+            userGoals = data;
+            renderGoals();
+        }
+    }
+
+    async function addGoal() {
+        const name = document.getElementById('goalName').value;
+        const start = document.getElementById('startDate').value || new Date().toISOString().split('T')[0];
+        const end = document.getElementById('endDate').value;
+        const color = document.getElementById('goalColor').value;
+        
+        if (!name || !end) return showToast("Заполни название и дату!");
+
+        const { data, error } = await supabaseClient.from('goals').insert([
+            { name, start, end, color, user_id: currentUser.id }
+        ]).select();
+
+        if (!error) {
+            userGoals.push(data[0]);
+            renderGoals();
+            document.getElementById('goalName').value = '';
+            showToast("Сохранено в облаке!");
+            confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 } });
+        } else {
+            showToast("Ошибка базы: " + error.message);
+        }
+    }
+
+    async function deleteGoal(id, e) {
+        e.stopPropagation();
+        const { error } = await supabaseClient.from('goals').delete().eq('id', id);
+        if (!error) {
+            userGoals = userGoals.filter(g => g.id !== id);
+            renderGoals();
+            showToast("Удалено");
+        }
+    }
+
+    // --- ВИЗУАЛ ---
+    function renderGoals() {
+        const container = document.getElementById('custom-tasks');
+        container.innerHTML = '';
+        userGoals.forEach(g => {
+            container.innerHTML += `
+                <div class="progress-card" onclick="toggleView()">
+                    <div class="info">
+                        <span class="title">${g.name} <button class="del-btn" onclick="deleteGoal(${g.id}, event)">✕</button></span>
+                        <span class="percentage" id="perc-${g.id}">0%</span>
+                    </div>
+                    <div class="bar-container">
+                        <div class="bar-fill" style="background: ${g.color}" id="bar-${g.id}"></div>
+                    </div>
+                </div>`;
+        });
+    }
+
+    function updateCircleColor(val) { document.getElementById('colorIndicator').style.backgroundColor = val; }
+    function toggleZen() { document.body.classList.toggle('zen-mode'); }
+    function showToast(msg) {
+        const t = document.getElementById('toast');
+        t.innerText = msg; t.style.opacity = '1';
+        setTimeout(() => t.style.opacity = '0', 2500);
+    }
+
+    function updateFavicon(hour) {
+        if (hour === currentFaviconHour) return;
+        currentFaviconHour = hour;
+        const clocks = ['🕛','🕐','🕑','🕒','🕓','🕔','🕕','🕖','🕗','🕘','🕙','🕚','🕛','🕐','🕑','🕒','🕓','🕔','🕕','🕖','🕗','🕘','🕙','🕚'];
+        const emoji = clocks[hour] || '⏳';
+        const favicon = document.getElementById('favicon');
+        favicon.href = `data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>${emoji}</text></svg>`;
+    }
+
+    function toggleView() {
+        showAsCountdown = !showAsCountdown;
+        showToast(showAsCountdown ? "Режим: Дни" : "Режим: Проценты");
+    }
+
+    function update() {
+        const now = new Date();
+        const hour = now.getHours();
+        updateFavicon(hour);
+
+        const header = document.getElementById('dynamic-header');
+        const greeting = document.getElementById('greeting');
+        let gradient, text;
+
+        if (hour >= 5 && hour < 11) { gradient = "linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%)"; text = "Доброе утро"; }
+        else if (hour >= 11 && hour < 18) { gradient = "linear-gradient(135deg, #6366f1 0%, #a855f7 100%)"; text = "Добрый день"; }
+        else if (hour >= 18 && hour < 22) { gradient = "linear-gradient(135deg, #fa709a 0%, #fee140 100%)"; text = "Добрый вечер"; }
+        else { gradient = "linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)"; text = "Доброй ночи"; }
+
+        if (greeting && greeting.innerText !== text) {
+            header.style.background = gradient;
+            greeting.innerText = text;
+        }
+        
+        baseItems.forEach(item => {
+            let prog = 0, label = "";
+            if (item.unit === 'day') {
+                prog = ((now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400) * 100;
+                label = showAsCountdown ? (23 - now.getHours()) + " ч" : prog.toFixed(2) + "%";
+            } else if (item.unit === 'month') {
+                const total = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+                prog = (now.getDate() / total) * 100;
+                label = showAsCountdown ? (total - now.getDate()) + " дн" : prog.toFixed(2) + "%";
+            } else if (item.unit === 'year') {
+                const start = new Date(now.getFullYear(), 0, 1);
+                const end = new Date(now.getFullYear() + 1, 0, 1);
+                prog = ((now - start) / (end - start)) * 100;
+                label = showAsCountdown ? Math.floor((end - now)/86400000) + " дн" : prog.toFixed(2) + "%";
+            }
+            const bar = document.getElementById(`bar-${item.id}`);
+            const perc = document.getElementById(`perc-${item.id}`);
+            if(bar) bar.style.width = prog + "%";
+            if(perc) perc.innerText = label;
+        });
+
+        userGoals.forEach(g => {
+            const startDate = new Date(g.start);
+            const endDate = new Date(g.end);
+            endDate.setHours(23,59,59);
+            let prog = now >= endDate ? 100 : Math.max(0, ((now - startDate) / (endDate - startDate)) * 100);
+            const bar = document.getElementById(`bar-${g.id}`);
+            const perc = document.getElementById(`perc-${g.id}`);
+            if (bar && perc) {
+                bar.style.width = prog + "%";
+                perc.innerText = prog >= 100 ? "Готово!" : (showAsCountdown ? Math.ceil((endDate - now)/86400000) + " дн" : prog.toFixed(1) + "%");
+            }
+        });
+        requestAnimationFrame(update);
+    }
+
+    function shareReport() {
+        const now = new Date();
+        let reportText = `📊 МОЙ ОТЧЕТ (${now.toLocaleDateString()})\n---------------------------\n🗓 Год: ${document.getElementById('perc-year').innerText}\n`;
+        if (userGoals.length > 0) {
+            reportText += `\n🎯 ЦЕЛИ:\n`;
+            userGoals.forEach(g => {
+                const end = new Date(g.end); end.setHours(23,59,59);
+                let prog = now >= end ? 100 : Math.max(0, ((now - new Date(g.start)) / (end - new Date(g.start))) * 100);
+                reportText += `• ${g.name}: ${prog >= 100 ? "✅" : prog.toFixed(1) + "%"}\n`;
+            });
+        }
+        navigator.clipboard.writeText(reportText + `\n🚀 Сделано в Time Dash`).then(() => {
+            showToast("Отчет скопирован!");
+            confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+        });
+    }
+
+    // Инициализация интерфейса базовых задач
+    const baseContainer = document.getElementById('base-tasks');
+    baseItems.forEach(item => {
+        baseContainer.innerHTML += `
+            <div class="progress-card" onclick="toggleView()">
+                <div class="info">
+                    <span class="title">${item.label}</span>
+                    <span class="percentage" id="perc-${item.id}">0%</span>
+                </div>
+                <div class="bar-container">
+                    <div class="bar-fill" style="background: ${item.color}" id="bar-${item.id}"></div>
+                </div>
+            </div>`;
+    });
+
+    document.getElementById('current-date').innerText = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+    update();
+</script>
+</body>
+</html>
