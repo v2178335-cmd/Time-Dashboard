@@ -3,13 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Time Dashboard v5.0 (TG Edition)</title>
+    <title>Time Dashboard v5.5 </title>
 
     <link id="favicon" rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⏳</text></svg>">
     
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
-    <!-- Telegram SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
     <style>
@@ -137,7 +136,7 @@
 <script>
     const SUPABASE_URL = 'https://pknlgkatbzoqemyyomnr.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_my49hMN7vJp2xXfqxiQ90Q_7Zg708ua';
-    const CF_WORKER_URL = 'https://time-dashboard.v2178335.workers.dev'; // ЗАМЕНИТЕ НА СВОЙ URL
+    const CF_WORKER_URL = 'https://time-dashboard.v2178335.workers.dev';
     
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     const tg = window.Telegram.WebApp;
@@ -186,11 +185,10 @@
     async function initApp() {
         await autoBindTelegram();
         fetchGoals();
-        tg.expand(); // Развернуть Mini App
+        tg.expand();
     }
 
     async function autoBindTelegram() {
-        // Проверяем наличие профиля в базе
         const { data: profile } = await supabaseClient.from('profiles').select('telegram_id').eq('id', currentUser.id).single();
         
         if (profile && profile.telegram_id) {
@@ -232,7 +230,6 @@
             userGoals.push(data[0]);
             renderGoals();
 
-            // Отправка уведомления в Telegram через Cloudflare
             if (currentUserTgId) {
                 fetch(CF_WORKER_URL, {
                     method: 'POST',
@@ -249,54 +246,59 @@
         }
     }
 
-    // ФУНКЦИЯ УДАЛЕНИЯ (КРЕСТИК)
     async function deleteGoal(id, e) {
         e.stopPropagation();
         if (!confirm("Удалить эту цель?")) return;
 
         const goal = userGoals.find(g => g.id === id);
-        const { error } = await supabaseClient.from('goals').delete().eq('id', id);
-        
-        if (!error) {
-            if (currentUserTgId) {
-                fetch(CF_WORKER_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chat_id: currentUserTgId, name: goal.name, type: 'delete' })
-                });
+        if (!goal) return;
+
+        userGoals = userGoals.filter(g => g.id !== id);
+        renderGoals();
+        showToast("Удалено ❌");
+
+        supabaseClient.from('goals').delete().eq('id', id).then(({ error }) => {
+            if (error) {
+                showToast("Ошибка при удалении в облаке");
+                console.error(error);
             }
-            userGoals = userGoals.filter(g => g.id !== id);
-            renderGoals();
-            showToast("Удалено ❌");
+        });
+
+        if (currentUserTgId) {
+            fetch(CF_WORKER_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: currentUserTgId, name: goal.name, type: 'delete' })
+            });
         }
     }
 
-    // ФУНКЦИЯ ЗАВЕРШЕНИЯ (ГАЛОЧКА)
+    // ФУНКЦИЯ ЗАВЕРШЕНИЯ (ГАЛОЧКА) — ТЕПЕРЬ МГНОВЕННАЯ
     async function completeGoal(id, e) {
         e.stopPropagation();
         const goal = userGoals.find(g => g.id === id);
+        if (!goal) return;
+
+        confetti({ particleCount: 200, spread: 100, origin: { y: 0.6 } });
         
-        // Удаляем из базы, так как цель достигнута
-        const { error } = await supabaseClient.from('goals').delete().eq('id', id);
-        
-        if (!error) {
-            // Запускаем конфетти на весь экран!
-            confetti({ particleCount: 200, spread: 100, origin: { y: 0.6 } });
-            
-            if (currentUserTgId) {
-                fetch(CF_WORKER_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chat_id: currentUserTgId, name: goal.name, type: 'complete' })
-                });
-            }
-            userGoals = userGoals.filter(g => g.id !== id);
-            renderGoals();
-            showToast("ПОЗДРАВЛЯЕМ! 🎉");
+        userGoals = userGoals.filter(g => g.id !== id);
+        renderGoals();
+        showToast("ПОЗДРАВЛЯЕМ! 🎉");
+
+        supabaseClient.from('goals').delete().eq('id', id).then(({ error }) => {
+            if (error) console.error("Ошибка Supabase:", error);
+        });
+
+        if (currentUserTgId) {
+            fetch(CF_WORKER_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: currentUserTgId, name: goal.name, type: 'complete' })
+            });
         }
     }
 
-    // --- ВИЗУАЛ (БЕЗ ИЗМЕНЕНИЙ) ---
+    // --- ВИЗУАЛ ---
     function renderGoals() {
         const container = document.getElementById('custom-tasks');
         container.innerHTML = '';
