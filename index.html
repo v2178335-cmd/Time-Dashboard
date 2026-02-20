@@ -3,12 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Time Dashboard v4.0</title>
+    <title>Time Dashboard v5.0 (TG Edition)</title>
 
     <link id="favicon" rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⏳</text></svg>">
     
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <!-- Telegram SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
     <style>
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -79,6 +81,9 @@
             display: none !important;
         }
         .del-btn { color: #ef4444; border: none; background: none; cursor: pointer; font-size: 1.1rem; }
+        
+        /* Статус Telegram */
+        #tg-status { font-size: 0.65rem; margin-top: 5px; color: var(--text-sub); text-align: center; }
     </style>
 </head>
 <body>
@@ -86,7 +91,7 @@
 <div id="toast"></div>
 
 <div id="auth-container">
-    <header><h1>Вход</h1><p>Синхронизируй свои цели</p></header>
+    <header><h1>Dash Login</h1><p>Синхронизируй свои цели</p></header>
     <div class="auth-box">
         <input type="email" id="auth-email" placeholder="Email">
         <input type="password" id="auth-password" placeholder="Пароль">
@@ -119,7 +124,8 @@
             <div class="color-circle" id="colorIndicator" onclick="document.getElementById('goalColor').click()"></div>
             <span style="font-size: 0.8rem; color: var(--text-sub);">Цвет полоски</span>
         </div>
-        <button onclick="addGoal()">Создать в облаке</button>
+        <button onclick="addGoal()">Создать и уведомить</button>
+        <div id="tg-status">Уведомления отключены</div>
     </div>
     
     <button class="logout-btn" onclick="handleLogout()">Выйти из аккаунта</button>
@@ -128,12 +134,14 @@
 <script>
     const SUPABASE_URL = 'https://pknlgkatbzoqemyyomnr.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_my49hMN7vJp2xXfqxiQ90Q_7Zg708ua';
+    const CF_WORKER_URL = 'https://time-dashboard.v2178335.workers.dev'; // ЗАМЕНИТЕ НА СВОЙ URL
     
-    // Инициализация клиента
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const tg = window.Telegram.WebApp;
 
     let userGoals = [];
     let currentUser = null;
+    let currentUserTgId = null;
     let showAsCountdown = false;
     let currentFaviconHour = -1;
 
@@ -143,7 +151,7 @@
         { id: 'year', label: 'Год', unit: 'year', color: '#22c55e' }
     ];
 
-    // --- АВТОРИЗАЦИЯ ---
+    // --- АВТОРИЗАЦИЯ И TG ---
     async function handleAuth(type) {
         const email = document.getElementById('auth-email').value;
         const password = document.getElementById('auth-password').value;
@@ -154,12 +162,9 @@
             : await supabaseClient.auth.signUp({ email, password });
 
         if (error) showToast(error.message);
-        else if (type === 'signup') showToast("Регистрация успешна! Теперь войдите.");
     }
 
-    async function handleLogout() {
-        await supabaseClient.auth.signOut();
-    }
+    async function handleLogout() { await supabaseClient.auth.signOut(); }
 
     supabaseClient.auth.onAuthStateChange((event, session) => {
         currentUser = session?.user || null;
@@ -167,7 +172,7 @@
             document.getElementById('auth-container').style.display = 'none';
             document.getElementById('main-app').style.display = 'block';
             document.getElementById('controls').style.display = 'flex';
-            fetchGoals();
+            initApp();
         } else {
             document.getElementById('auth-container').style.display = 'block';
             document.getElementById('main-app').style.display = 'none';
@@ -175,13 +180,39 @@
         }
     });
 
+    async function initApp() {
+        await autoBindTelegram();
+        fetchGoals();
+        tg.expand(); // Развернуть Mini App
+    }
+
+    async function autoBindTelegram() {
+        // Проверяем наличие профиля в базе
+        const { data: profile } = await supabaseClient.from('profiles').select('telegram_id').eq('id', currentUser.id).single();
+        
+        if (profile && profile.telegram_id) {
+            currentUserTgId = profile.telegram_id;
+            document.getElementById('tg-status').innerText = "🔔 Уведомления активны (Telegram)";
+        }
+
+        // Если зашли через ТГ и ID еще нет в базе или он изменился
+        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+            const newTgId = tg.initDataUnsafe.user.id.toString();
+            if (newTgId !== currentUserTgId) {
+                const { error } = await supabaseClient.from('profiles').upsert({ id: currentUser.id, telegram_id: newTgId });
+                if (!error) {
+                    currentUserTgId = newTgId;
+                    document.getElementById('tg-status').innerText = "🔔 Уведомления привязаны!";
+                }
+            }
+            document.getElementById('greeting').innerText = `Привет, ${tg.initDataUnsafe.user.first_name || 'друг'}`;
+        }
+    }
+
     // --- РАБОТА С БАЗОЙ ---
     async function fetchGoals() {
         const { data, error } = await supabaseClient.from('goals').select('*');
-        if (!error) {
-            userGoals = data;
-            renderGoals();
-        }
+        if (!error) { userGoals = data; renderGoals(); }
     }
 
     async function addGoal() {
@@ -192,32 +223,36 @@
         
         if (!name || !end) return showToast("Заполни название и дату!");
 
-        const { data, error } = await supabaseClient.from('goals').insert([
-            { name, start, end, color, user_id: currentUser.id }
-        ]).select();
+        const { data, error } = await supabaseClient.from('goals').insert([{ name, start, end, color, user_id: currentUser.id }]).select();
 
         if (!error) {
             userGoals.push(data[0]);
             renderGoals();
+
+            // Отправка уведомления в Telegram через Cloudflare
+            if (currentUserTgId) {
+                fetch(CF_WORKER_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chat_id: currentUserTgId, name, end })
+                }).catch(e => console.log("Worker error"));
+            }
+
             document.getElementById('goalName').value = '';
-            showToast("Сохранено в облаке!");
+            showToast("Сохранено!");
             confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 } });
         } else {
-            showToast("Ошибка базы: " + error.message);
+            showToast("Ошибка: " + error.message);
         }
     }
 
     async function deleteGoal(id, e) {
         e.stopPropagation();
         const { error } = await supabaseClient.from('goals').delete().eq('id', id);
-        if (!error) {
-            userGoals = userGoals.filter(g => g.id !== id);
-            renderGoals();
-            showToast("Удалено");
-        }
+        if (!error) { userGoals = userGoals.filter(g => g.id !== id); renderGoals(); showToast("Удалено"); }
     }
 
-    // --- ВИЗУАЛ ---
+    // --- ВИЗУАЛ (БЕЗ ИЗМЕНЕНИЙ) ---
     function renderGoals() {
         const container = document.getElementById('custom-tasks');
         container.innerHTML = '';
@@ -247,9 +282,8 @@
         if (hour === currentFaviconHour) return;
         currentFaviconHour = hour;
         const clocks = ['🕛','🕐','🕑','🕒','🕓','🕔','🕕','🕖','🕗','🕘','🕙','🕚','🕛','🕐','🕑','🕒','🕓','🕔','🕕','🕖','🕗','🕘','🕙','🕚'];
-        const emoji = clocks[hour] || '⏳';
         const favicon = document.getElementById('favicon');
-        favicon.href = `data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>${emoji}</text></svg>`;
+        favicon.href = `data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>${clocks[hour] || '⏳'}</text></svg>`;
     }
 
     function toggleView() {
@@ -271,7 +305,7 @@
         else if (hour >= 18 && hour < 22) { gradient = "linear-gradient(135deg, #fa709a 0%, #fee140 100%)"; text = "Добрый вечер"; }
         else { gradient = "linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)"; text = "Доброй ночи"; }
 
-        if (greeting && greeting.innerText !== text) {
+        if (greeting && !tg.initDataUnsafe.user && greeting.innerText !== text) {
             header.style.background = gradient;
             greeting.innerText = text;
         }
@@ -299,8 +333,7 @@
 
         userGoals.forEach(g => {
             const startDate = new Date(g.start);
-            const endDate = new Date(g.end);
-            endDate.setHours(23,59,59);
+            const endDate = new Date(g.end); endDate.setHours(23,59,59);
             let prog = now >= endDate ? 100 : Math.max(0, ((now - startDate) / (endDate - startDate)) * 100);
             const bar = document.getElementById(`bar-${g.id}`);
             const perc = document.getElementById(`perc-${g.id}`);
@@ -315,21 +348,17 @@
     function shareReport() {
         const now = new Date();
         let reportText = `📊 МОЙ ОТЧЕТ (${now.toLocaleDateString()})\n---------------------------\n🗓 Год: ${document.getElementById('perc-year').innerText}\n`;
-        if (userGoals.length > 0) {
-            reportText += `\n🎯 ЦЕЛИ:\n`;
-            userGoals.forEach(g => {
-                const end = new Date(g.end); end.setHours(23,59,59);
-                let prog = now >= end ? 100 : Math.max(0, ((now - new Date(g.start)) / (end - new Date(g.start))) * 100);
-                reportText += `• ${g.name}: ${prog >= 100 ? "✅" : prog.toFixed(1) + "%"}\n`;
-            });
-        }
+        userGoals.forEach(g => {
+            const end = new Date(g.end); end.setHours(23,59,59);
+            let prog = now >= end ? 100 : Math.max(0, ((now - new Date(g.start)) / (end - new Date(g.start))) * 100);
+            reportText += `• ${g.name}: ${prog >= 100 ? "✅" : prog.toFixed(1) + "%"}\n`;
+        });
         navigator.clipboard.writeText(reportText + `\n🚀 Сделано в Time Dash`).then(() => {
             showToast("Отчет скопирован!");
             confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
         });
     }
 
-    // Инициализация интерфейса базовых задач
     const baseContainer = document.getElementById('base-tasks');
     baseItems.forEach(item => {
         baseContainer.innerHTML += `
