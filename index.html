@@ -246,11 +246,32 @@
         }
     }
 
-    async function deleteGoal(id, e) {
-        e.stopPropagation();
-        const { error } = await supabaseClient.from('goals').delete().eq('id', id);
-        if (!error) { userGoals = userGoals.filter(g => g.id !== id); renderGoals(); showToast("Удалено"); }
+async function deleteGoal(id, e) {
+    e.stopPropagation();
+    // Находим название цели перед удалением
+    const goalToDelete = userGoals.find(g => g.id === id);
+    const goalName = goalToDelete ? goalToDelete.name : "Без названия";
+
+    const { error } = await supabaseClient.from('goals').delete().eq('id', id);
+    if (!error) {
+        // Отправляем уведомление об удалении
+        if (currentUserTgId) {
+            fetch(CF_WORKER_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    chat_id: currentUserTgId, 
+                    name: goalName, 
+                    type: 'delete' 
+                })
+            }).catch(e => console.log("Бот не ответил"));
+        }
+
+        userGoals = userGoals.filter(g => g.id !== id);
+        renderGoals();
+        showToast("Удалено");
     }
+}
 
     // --- ВИЗУАЛ (БЕЗ ИЗМЕНЕНИЙ) ---
     function renderGoals() {
